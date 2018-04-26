@@ -1,91 +1,132 @@
+"""
+Collect commits of each user on github graphql API
+"""
+
+import datetime
 import requests
 import os
-import datetime
 
 from dotenv import find_dotenv
 from dotenv import load_dotenv
 from dateutil.relativedelta import relativedelta
 from dateutil.relativedelta import MO, TU, WE, TH, FR, SA, SU
 
-
-GH_URL = "https://api.github.com"
-REPO_URL = "/repos/fga-gpp-mds/2018.1-TropicalHazards-BI"
-URL = GH_URL + REPO_URL
-
 load_dotenv(find_dotenv())
 
-USER = os.getenv("USER_GITHUB")
-PASS = os.getenv("PASS_GITHUB")
+TOKEN = "Bearer {token}".format(token=os.getenv('TOKEN'))
+HEADERS = {"Authorization": TOKEN}
+
+repo = "2018.1-TropicalHazards-BI"
+
+
+def run_query(query):
+    request = requests.post('https://api.github.com/graphql',
+                            json={'query': query}, headers=HEADERS)
+    if request.status_code == 200:
+        return request.json()
+    else:
+        raise Exception("Query failed to run by returning code of {}. {}".format(request.status_code, query))
+
+
+def get_collabs():
+    query_collabs = """
+    {
+      repository(name: "2018.1-TropicalHazards-BI", owner: "fga-gpp-mds") {
+        collaborators(first: 50, affiliation: DIRECT){
+          nodes {
+            id
+            login
+          }
+        }
+      }
+    }
+
+    """
+    raw_collabs = run_query(query_collabs)
+    collabs = []
+
+    for collab in raw_collabs['data']['repository']['collaborators']['nodes']:
+        if collab['login'] == 'arkye' or collab['login'] == 'pyup-bot':
+            continue
+        collabs.append((collab['login'], collab['id']))
+
+    return tuple(collabs)
 
 
 def get_branches():
-    branches_url = "/branches"
-    url = URL + branches_url
-    branches = requests.get(url, auth=(USER, PASS))
 
-    return branches.json()
+    query_branches = """
+    {
+      repository(name: "2018.1-TropicalHazards-BI", owner: "fga-gpp-mds") {
+        refs(first: 50, refPrefix: "refs/heads/"){
+          nodes {
+            name
+          }
+        }
+      }
+    }
+    """
+    raw_branches = run_query(query_branches)
+    branches = []
 
+    for branch in raw_branches['data']['repository']['refs']['nodes']:
+        branches.append(branch['name'])
 
-def get_contributors():
-    contributors_url = "/contributors"
-    url = URL + contributors_url
-    contributors = requests.get(url, auth=(USER, PASS))
-
-    return contributors.json()
-
-
-def formatted_date(date):
-    """ Expect a datetime object as param"""
-    return datetime.datetime.strftime(date, "%Y-%m-%dT%H:%M:%S")
-
-
-def retrive_commits(time):
-    commits_url = "/commits"
-    url = URL + commits_url + time
-
-    contributors = get_contributors()
-    branches = get_branches()
-
-    number = 0
-    response = {}
-    for contributor in contributors:
-        number = 0
-        print("Coletando commits do {}".format(contributor['login']))
-        for branch in branches:
-            if branch['name'] == 'gh-pages' or branch['name'] == 'master' or branch['name'] == 'development':
-                continue
-
-            get_url = url + "&sha={}&author={}".format(branch['name'],contributor['login'])
-            data = requests.get(get_url, auth=(USER, PASS)).json()
-            number += len(data)
-        response[contributor['login']] = number
-
-    return response
+    return branches
 
 
-def get_last_past_weekday(weekday):
+def get_week_day(weekday):
     """ Expect one of dateutil weekdays:
-    MO, TU, WE, TH, FR, SA, SU"""
-    last_weekday_init = datetime.datetime.now() + relativedelta(weekday=weekday(-1), hours=0, minutes=0, seconds=0)
-    last_weekday_end = datetime.datetime.now() + relativedelta(weekday=weekday(-1), hours=23, minutes=59, seconds=58)
-    last_weekday = {'initial': last_weekday_init, 'end': last_weekday_end}
+        MO, TU, WE, TH, FR, SA, SU"""
 
-    return last_weekday
+    last_week_day = datetime.date.today() + relativedelta(weekday=weekday(-1))
+
+    return str(last_week_day)
 
 
-def get_commits_by_day():
-    weekdays = (MO, TU, WE, TH, FR, SA, SU)
-    day = get_last_past_weekday(MO)
-    result_by_days = {}
+def get_commits(weekday):
+    branches = get_branches()
+    collabs = get_collabs()
+    day = get_week_day(weekday)
+    result = {}
+
+    for collab in collabs:
+        print("Collecting commits of {} on {}".format(collab[0], day))
+        number = 0
+        for branch in branches:
+            query = """
+            {
+              repository(name: "2018.1-TropicalHazards-BI", owner: "fga-gpp-mds") {
+                ref(qualifiedName: "%(branch)s") {
+                  target {
+                    ... on Commit {
+                      history(first: 50, since: "%(date)sT00:00:00-03:00", until: "%(date)sT23:59:59-03:00", author: {id: "%(author)s"}) {
+                        totalCount
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """ % {'branch': branch, 'author': collab[1], 'date': day}
+            response = run_query(query)
+            number += response["data"]["repository"]["ref"]["target"]["history"]["totalCount"]
+        result[collab[0]] = number
+
+    return result
+
+
+def get_commits_of_week():
+    weekdays = (MO, TU)
+    result = {}
+
     for weekday in weekdays:
-        commits = retrive_commits(get_last_past_weekday(weekday))
-        result_by_days[weekday] =
+        result[weekday] = get_commits(weekday)
+
+    return result
 
 
-    commits = retrive_commits(day)
 
-    return commits
-
-
-result = get_commits_by_day()
-import ipdb;ipdb.set_trace()
+# result = get_commits()
+result = get_commits_of_week()
+print(result)
