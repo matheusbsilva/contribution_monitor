@@ -12,6 +12,8 @@ from dotenv import find_dotenv
 from dotenv import load_dotenv
 from dateutil.relativedelta import relativedelta
 from dateutil.relativedelta import MO, TU, WE, TH, FR, SA, SU
+from dateutil import parser
+from dateutil import tz
 
 load_dotenv(find_dotenv())
 
@@ -89,7 +91,7 @@ def get_week_day(weekday):
 # TODO: Refact this method
 def get_co_authored(response):
     co_authoreds = {}
-    messages = response
+    messages = response['nodes']
     if messages:
         for message in messages:
             if message['messageBody']:
@@ -103,6 +105,32 @@ def get_co_authored(response):
                         co_authoreds[author] = 1
 
     return co_authoreds
+
+
+def clean_old_commits(response, date):
+    """
+    Remove commits that have authored date different
+    from the committed date, that means old commits pushed
+    togheter with the new ones
+    """
+
+    date = parser.parse(date)
+    date = date.date()
+    nodes = response["data"]["repository"]["ref"]["target"]["history"]["nodes"]
+    total_count = response["data"]["repository"]["ref"]["target"]["history"]["totalCount"]
+    clean_commits = []
+
+    if nodes:
+        for commit in nodes:
+            commit_date = parser.parse(commit['authoredDate'])
+            commit_date = commit_date.astimezone(tz.tzlocal())
+            commit_date = commit_date.date()
+            if commit_date != date:
+                total_count -= 1
+                continue
+            clean_commits.append(commit)
+
+    return {"totalCount": total_count, "nodes": clean_commits}
 
 
 def get_commits(weekday):
@@ -136,15 +164,16 @@ def get_commits(weekday):
             }
             """ % {'branch': branch, 'author': collabs[collab]['id'], 'date': day}
             response = run_query(query)
+            response = clean_old_commits(response, day)
             co_authoreds = {**co_authoreds, **get_co_authored(response)}
-            number += response["data"]["repository"]["ref"]["target"]["history"]["totalCount"]
+            number += response["totalCount"]
 
         result[collab] = number
     return result
 
 
 def get_commits_of_week():
-    weekdays = (MO, TU, WE)
+    weekdays = (WE,)
     result = {}
 
     for weekday in weekdays:
