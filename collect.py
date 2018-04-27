@@ -20,7 +20,7 @@ HEADERS = {"Authorization": TOKEN}
 
 
 def run_query(query):
-    # TODO: Probably is the parsing of the query string to json that is taking too long 
+    # TODO: Probably is the parsing of the query string to json that is taking too long
     # 2-5 seconds
     request = requests.post('https://api.github.com/graphql',
                             json={'query': query}, headers=HEADERS)
@@ -38,23 +38,23 @@ def get_collabs():
           nodes {
             id
             login
+            email
           }
         }
       }
     } """
     raw_collabs = run_query(query_collabs)
-    collabs = []
+    collabs = {}
 
     for collab in raw_collabs['data']['repository']['collaborators']['nodes']:
         if collab['login'] == 'arkye' or collab['login'] == 'pyup-bot':
             continue
-        collabs.append((collab['login'], collab['id']))
+        collabs[collab['login']] = {"id": collab['id'], "email": collab['email']}
 
-    return tuple(collabs)
+    return collabs
 
 
 def get_branches():
-
     query_branches = """
     {
       repository(name: "2018.1-TropicalHazards-BI", owner: "fga-gpp-mds") {
@@ -70,6 +70,8 @@ def get_branches():
     branches = []
 
     for branch in raw_branches['data']['repository']['refs']['nodes']:
+        if branch['name'] == 'development' or branch['name'] == 'master':
+            continue
         branches.append(branch['name'])
 
     return branches
@@ -84,13 +86,34 @@ def get_week_day(weekday):
     return str(last_week_day)
 
 
+# TODO: Refact this method
+def get_co_authored(response):
+    co_authoreds = {}
+    messages = response
+    if messages:
+        for message in messages:
+            if message['messageBody']:
+                body = message['messageBody'].split('Co-authored-by:')
+                body.pop(0)
+                for co_authored in body:
+                    author = co_authored.split("<")[1].split(">")[0]
+                    try:
+                        co_authoreds[author] += 1
+                    except KeyError:
+                        co_authoreds[author] = 1
+
+    return co_authoreds
+
+
 def get_commits(weekday):
     branches = get_branches()
     collabs = get_collabs()
     day = get_week_day(weekday)
     result = {}
+    co_authoreds = {}
+
     for collab in collabs:
-        print("Collecting commits of {} on {}".format(collab[0], day))
+        print("Collecting commits of {} on {}".format(collab, day))
         number = 0
         for branch in branches:
             query = """
@@ -101,17 +124,22 @@ def get_commits(weekday):
                     ... on Commit {
                       history(first: 50, since: "%(date)sT00:00:00-03:00", until: "%(date)sT23:59:59-03:00", author: {id: "%(author)s"}) {
                         totalCount
+                        nodes {
+                          authoredDate
+                          messageBody
+                        }
                       }
                     }
                   }
                 }
               }
             }
-            """ % {'branch': branch, 'author': collab[1], 'date': day}
+            """ % {'branch': branch, 'author': collabs[collab]['id'], 'date': day}
             response = run_query(query)
+            co_authoreds = {**co_authoreds, **get_co_authored(response)}
             number += response["data"]["repository"]["ref"]["target"]["history"]["totalCount"]
 
-        result[collab[0]] = number
+        result[collab] = number
     return result
 
 
