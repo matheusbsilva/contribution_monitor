@@ -5,7 +5,6 @@ Collect commits of each user on github graphql API
 import datetime
 import requests
 import os
-import json
 import pandas
 
 from dotenv import find_dotenv
@@ -18,7 +17,7 @@ from dateutil import tz
 load_dotenv(find_dotenv())
 
 TOKEN = "Bearer {token}".format(token=os.getenv('TOKEN'))
-HEADERS = {"Authorization": TOKEN}
+HEADERS = {"Authorization": TOKEN, "Content-Type": "application/json"}
 
 
 def run_query(query):
@@ -133,6 +132,16 @@ def clean_old_commits(response, date):
     return {"totalCount": total_count, "nodes": clean_commits}
 
 
+def arrange_co_authoreds(co_authoreds: dict, new_co_authoreds: dict):
+    for co_author in new_co_authoreds:
+        try:
+            co_authoreds[co_author] += new_co_authoreds[co_author]
+        except KeyError:
+            co_authoreds[co_author] = new_co_authoreds[co_author]
+
+    return co_authoreds
+
+
 def get_commits(weekday):
     branches = get_branches()
     collabs = get_collabs()
@@ -165,28 +174,59 @@ def get_commits(weekday):
             """ % {'branch': branch, 'author': collabs[collab]['id'], 'date': day}
             response = run_query(query)
             response = clean_old_commits(response, day)
-            co_authoreds = {**co_authoreds, **get_co_authored(response)}
+            raw_co_authores = get_co_authored(response)
+            co_authoreds = arrange_co_authoreds(co_authoreds, raw_co_authores)
             number += response["totalCount"]
 
         result[collab] = number
-    return result
+    return {"commits": result, "co_authoreds": co_authoreds}
+
+
+# TODO: Fix this hardcoded emails and users
+def rename_email_columns(df: pandas.DataFrame):
+    return df.rename(
+                     columns={'joaok8@gmail.com': 'jppgomes',
+                              'pedrodaniel.unb@gmail.com': 'pdaniel37',
+                              'maxhb.df@gmail,com': 'Maxlobo',
+                              'matheusbattista@hotmail.com': 'matheusbsilva',
+                              'arthur120496@gmail.com': 'arthur0496',
+                              'andre.filho001@outlook.com': 'andre-filho',
+                              'renata.rfsouza@gmail.com': 'Renatafsouza',
+                              'edry97@hotmail.com': 'Yoshida-Eduardo',
+                              'andrebargas@gmail.com': 'andrebargas',
+                              'iagovc_2012@hotmail.com': 'IagoCarvalho'})
+
+
+def sum_data_frames(df1, df2):
+    return df1.add(df2).fillna(df1)
+
+
+def turn_into_df(result: dict):
+    return pandas.DataFrame.from_dict(result, orient='index')
 
 
 def get_commits_of_week():
-    weekdays = (WE,)
-    result = {}
+    weekdays = (TU, WE)
+    result_commits = {}
+    result_co_authoreds = {}
 
     for weekday in weekdays:
-        result[str(weekday)] = get_commits(weekday)
+        commits = get_commits(weekday)
+        result_commits[str(weekday)] = commits['commits']
+        result_co_authoreds[str(weekday)] = commits['co_authoreds']
 
-    return result
+    return {"commits": result_commits, "co_authoreds": result_co_authoreds}
 
 
-def write_json_to_csv(result_dict):
-    df = pandas.DataFrame.from_dict(result_dict, orient='index')
+def write_json_to_csv(df: pandas.DataFrame):
     return df.to_csv('data.csv', sep='\t', encoding='utf-8')
 
 
 result = get_commits_of_week()
-write_json_to_csv(result)
+df_commit = turn_into_df(result['commits'])
+df_auhored = turn_into_df(result['co_authoreds'])
+
+sum_df = sum_data_frames(df_commit, rename_email_columns(df_auhored))
+write_json_to_csv(sum_df)
+
 
