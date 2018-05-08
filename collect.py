@@ -18,6 +18,9 @@ load_dotenv(find_dotenv())
 
 TOKEN = "Bearer {token}".format(token=os.getenv('TOKEN'))
 HEADERS = {"Authorization": TOKEN, "Content-Type": "application/json"}
+REPO_GITHUB = "2018.1-TropicalHazards-BI"
+OWNER_REPO = "fga-gpp-mds"
+FILE_NAME = "back2.csv"
 
 
 def run_query(query):
@@ -34,7 +37,7 @@ def run_query(query):
 def get_collabs():
     query_collabs = """
     {
-      repository(name: "2018.1-TropicalHazards-BI", owner: "fga-gpp-mds") {
+      repository(name: "%(repo)s", owner: "%(owner)s") {
         collaborators(first: 50, affiliation: DIRECT){
           nodes {
             id
@@ -43,7 +46,7 @@ def get_collabs():
           }
         }
       }
-    } """
+    } """ % {"repo": REPO_GITHUB, "owner": OWNER_REPO}
     raw_collabs = run_query(query_collabs)
     collabs = {}
 
@@ -58,7 +61,7 @@ def get_collabs():
 def get_branches():
     query_branches = """
     {
-      repository(name: "2018.1-TropicalHazards-BI", owner: "fga-gpp-mds") {
+      repository(name: "%(repo)s", owner: "%(owner)s") {
         refs(first: 50, refPrefix: "refs/heads/"){
           nodes {
             name
@@ -66,7 +69,7 @@ def get_branches():
         }
       }
     }
-    """
+    """ % {"repo": REPO_GITHUB, "owner": OWNER_REPO}
     raw_branches = run_query(query_branches)
     branches = []
 
@@ -106,11 +109,11 @@ def get_co_authored(response):
     return co_authoreds
 
 
-def clean_old_commits(response, date):
+def clean_commits(response, date, hash_list):
     """
     Remove commits that have authored date different
     from the committed date, that means old commits pushed
-    togheter with the new ones
+    togheter with the new ones and duplicated commits
     """
 
     date = parser.parse(date)
@@ -124,7 +127,7 @@ def clean_old_commits(response, date):
             commit_date = parser.parse(commit['authoredDate'])
             commit_date = commit_date.astimezone(tz.tzlocal())
             commit_date = commit_date.date()
-            if commit_date != date:
+            if (commit_date != date or hash_list.count(commit['abbreviatedOid']) > 1):
                 total_count -= 1
                 continue
             clean_commits.append(commit)
@@ -142,6 +145,14 @@ def arrange_co_authoreds(co_authoreds: dict, new_co_authoreds: dict):
     return co_authoreds
 
 
+def list_commits_hash(response, hash_list):
+    nodes = response["data"]["repository"]["ref"]["target"]["history"]["nodes"]
+    for commit in nodes:
+        hash_list.append(commit['abbreviatedOid'])
+
+    return hash_list
+
+
 def get_commits(weekday):
     branches = get_branches()
     collabs = get_collabs()
@@ -152,10 +163,12 @@ def get_commits(weekday):
     for collab in collabs:
         print("Collecting commits of {} on {}".format(collab, day))
         number = 0
+        hash_list = []
+
         for branch in branches:
             query = """
             {
-              repository(name: "2018.1-TropicalHazards-BI", owner: "fga-gpp-mds") {
+              repository(name: "%(repo)s", owner: "%(owner)s") {
                 ref(qualifiedName: "%(branch)s") {
                   target {
                     ... on Commit {
@@ -164,6 +177,7 @@ def get_commits(weekday):
                         nodes {
                           authoredDate
                           messageBody
+                          abbreviatedOid
                         }
                       }
                     }
@@ -171,11 +185,18 @@ def get_commits(weekday):
                 }
               }
             }
-            """ % {'branch': branch, 'author': collabs[collab]['id'], 'date': day}
+            """ % {"repo": REPO_GITHUB, "owner": OWNER_REPO,
+                    'branch': branch, 'author': collabs[collab]['id'],
+                    'date': day, }
+
             response = run_query(query)
-            response = clean_old_commits(response, day)
+
+            hash_list = list_commits_hash(response, hash_list)
+            response = clean_commits(response, day, hash_list)
+
             raw_co_authores = get_co_authored(response)
             co_authoreds = arrange_co_authoreds(co_authoreds, raw_co_authores)
+
             number += response["totalCount"]
 
         result[collab] = number
@@ -187,7 +208,7 @@ def rename_email_columns(df: pandas.DataFrame):
     return df.rename(
                      columns={'joaok8@gmail.com': 'jppgomes',
                               'pedrodaniel.unb@gmail.com': 'pdaniel37',
-                              'maxhb.df@gmail,com': 'Maxlobo',
+                              'maxhb.df@gmail.com': 'Maxlobo',
                               'matheusbattista@hotmail.com': 'matheusbsilva',
                               'arthur120496@gmail.com': 'arthur0496',
                               'andre.filho001@outlook.com': 'andre-filho',
@@ -206,7 +227,7 @@ def turn_into_df(result: dict):
 
 
 def get_commits_of_week():
-    weekdays = (TU, WE)
+    weekdays = (MO, TU, WE, TH, FR)
     result_commits = {}
     result_co_authoreds = {}
 
@@ -219,14 +240,14 @@ def get_commits_of_week():
 
 
 def write_json_to_csv(df: pandas.DataFrame):
-    return df.to_csv('data.csv', sep='\t', encoding='utf-8')
+    return df.to_csv(FILE_NAME, sep='\t', encoding='utf-8')
 
 
 result = get_commits_of_week()
+
 df_commit = turn_into_df(result['commits'])
 df_auhored = turn_into_df(result['co_authoreds'])
-
-sum_df = sum_data_frames(df_commit, rename_email_columns(df_auhored))
+rename = rename_email_columns(df_auhored)
+sum_df = sum_data_frames(df_commit, rename)
 write_json_to_csv(sum_df)
-
 
