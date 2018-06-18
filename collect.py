@@ -18,9 +18,9 @@ load_dotenv(find_dotenv())
 
 TOKEN = "Bearer {token}".format(token=os.getenv('TOKEN'))
 HEADERS = {"Authorization": TOKEN, "Content-Type": "application/json"}
-REPO_GITHUB = "2018.1-TropicalHazards-BI"
+REPO_GITHUB = "2018.1-TropicalHazards-BI-FrontEnd"
 OWNER_REPO = "fga-gpp-mds"
-FILE_NAME = "back2.csv"
+FILE_NAME = "front.csv"
 
 
 def run_query(query):
@@ -74,7 +74,7 @@ def get_branches():
     branches = []
 
     for branch in raw_branches['data']['repository']['refs']['nodes']:
-        if branch['name'] == 'development' or branch['name'] == 'master':
+        if branch['name'] == 'master':
             continue
         branches.append(branch['name'])
 
@@ -100,11 +100,13 @@ def get_co_authored(response):
                 body = message['messageBody'].split('Co-authored-by:')
                 body.pop(0)
                 for co_authored in body:
-                    author = co_authored.split("<")[1].split(">")[0]
                     try:
+                        author = co_authored.split("<")[1].split(">")[0].lower()
                         co_authoreds[author] += 1
                     except KeyError:
                         co_authoreds[author] = 1
+                    except IndexError:
+                        continue
 
     return co_authoreds
 
@@ -227,7 +229,7 @@ def turn_into_df(result: dict):
 
 
 def get_commits_of_week():
-    weekdays = (MO, TU, WE, TH, FR)
+    weekdays = (MO, TU, WE, TH, FR, SA)
     result_commits = {}
     result_co_authoreds = {}
 
